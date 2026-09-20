@@ -8,15 +8,15 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 
 from config import (
     BOT_TOKEN as CONFIG_TOKEN,
     CLIENT_NAME, CLIENT_VERSION,
     CLIENT_SIZE, ADMIN_ID, SUPPORT_URL, JAR_FILE
 )
+import database as db
 
-# Токен берётся из Railway Variables (BOT_TOKEN),
-# если там пусто — из config.py
 BOT_TOKEN = os.getenv("BOT_TOKEN", CONFIG_TOKEN)
 
 logging.basicConfig(level=logging.INFO)
@@ -24,11 +24,10 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-stats = {"downloads": 0, "users": set()}
+stats = {"downloads": 0}
 
 
 def main_menu():
-    """Главное меню бота"""
     kb = InlineKeyboardBuilder()
     kb.button(text="📥 Скачать NightWare", callback_data="download")
     kb.button(text="ℹ️ Информация", callback_data="info")
@@ -38,7 +37,6 @@ def main_menu():
 
 
 def back_kb():
-    """Кнопка возврата в главное меню"""
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🏠 В главное меню", callback_data="back")
     ]])
@@ -46,7 +44,13 @@ def back_kb():
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    stats["users"].add(message.from_user.id)
+    # Сохраняем юзера в БД
+    await db.add_user(
+        user_id=message.from_user.id,
+        username=message.from_user.username or "",
+        first_name=message.from_user.first_name or ""
+    )
+
     text = (
         f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
         f"🌙 Это бот для скачивания мода <b>{CLIENT_NAME}</b>\n"
@@ -144,10 +148,11 @@ async def cb_back(callback: CallbackQuery):
 async def cmd_stats(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
+    count = await db.get_users_count()
     await message.answer(
         f"📊 <b>Статистика</b>\n\n"
-        f"👥 Юзеров: <b>{len(stats['users'])}</b>\n"
-        f"📥 Скачиваний: <b>{stats['downloads']}</b>",
+        f"👥 Юзеров в БД: <b>{count}</b>\n"
+        f"📥 Скачиваний за сессию: <b>{stats['downloads']}</b>",
         parse_mode="HTML"
     )
 
@@ -161,7 +166,77 @@ async def cmd_menu(message: Message):
     )
 
 
+# ===== РАССЫЛКА =====
+
+@dp.message(Command("broadcast"))
+async def cmd_broadcast(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    # Получаем текст после /broadcast
+    text = message.text.replace("/broadcast", "", 1).strip()
+
+    if not text:
+        await message.answer(
+            "📢 <b>Как делать рассылку:</b>\n\n"
+            "Напиши команду так:\n"
+            "<code>/broadcast Привет, вышел новый мод!</code>\n\n"
+            "Или отправь <b>в ответ</b> на любое сообщение (с картинкой/файлом) "
+            "команду <code>/broadcast</code> — оно разошлётся всем.",
+            parse_mode="HTML"
+        )
+        return
+
+    users = await db.get_all_users()
+    if not users:
+        await message.answer("📭 В базе пока нет пользователей.")
+        return
+
+    status_msg = await message.answer(
+        f"📢 Начинаю рассылку для <b>{len(users)}</b> юзеров...",
+        parse_mode="HTML"
+    )
+
+    success = 0
+    failed = 0
+
+    for user_id in users:
+        try:
+            await bot.send_message(
+                user_id,
+                f"📢 <b>Сообщение от админа:</b>\n\n{text}",
+                parse_mode="HTML"
+            )
+            success += 1
+            await asyncio.sleep(0.05)  # защита от лимитов Telegram
+        except TelegramForbiddenError:
+            # Юзер заблокировал бота
+            failed += 1
+        except TelegramRetryAfter as e:
+            # Превышен лимит — ждём сколько сказал Telegram
+            await asyncio.sleep(e.retry_after)
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"📢 <b>Сообщение от админа:</b>\n\n{text}",
+                    parse_mode="HTML"
+                )
+                success += 1
+            except Exception:
+                failed += 1
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📨 Доставлено: <b>{success}</b>\n"
+        f"❌ Не доставлено: <b>{failed}</b>",
+        parse_mode="HTML"
+    )
+
+
 async def main():
+    await db.init_db()
     print(f"🤖 Бот {CLIENT_NAME} запущен...")
     await dp.start_polling(bot)
 
