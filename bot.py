@@ -32,12 +32,11 @@ dp = Dispatcher()
 # ===== ПРОВЕРКА ПОДПИСКИ =====
 
 async def is_subscribed(user_id: int) -> bool:
-    """Проверяет подписан ли юзер на канал"""
+    """Проверяет, подписан ли юзер на канал"""
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ("member", "administrator", "creator")
     except TelegramBadRequest:
-        # Если канал неверно указан или бот не админ — не блокируем юзера
         logging.warning("Не удалось проверить подписку. Проверь CHANNEL_ID!")
         return True
     except Exception as e:
@@ -79,7 +78,7 @@ def lang_kb():
     ])
 
 
-# ===== ХЕНДЛЕРЫ =====
+# ===== ОСНОВНЫЕ КОМАНДЫ =====
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -98,11 +97,68 @@ async def cmd_start(message: Message):
     await message.answer(text, reply_markup=main_menu(lang), parse_mode="HTML")
 
 
+@dp.message(Command("menu"))
+async def cmd_menu(message: Message):
+    lang = await db.get_lang(message.from_user.id)
+    await message.answer(
+        t(lang, "menu_title"),
+        reply_markup=main_menu(lang),
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    lang = await db.get_lang(message.from_user.id)
+    if lang == "ru":
+        text = (
+            "❓ <b>Помощь</b>\n\n"
+            "📥 <b>Как скачать мод:</b>\n"
+            "1. Нажми «📥 Скачать NightWare»\n"
+            "2. Подпишись на канал (если требуется)\n"
+            "3. Получи файл\n\n"
+            "🎮 <b>Как установить:</b>\n"
+            "1. Установи <b>Fabric Loader</b> 1.21.4\n"
+            "2. Скачай <b>Fabric API</b> 1.21.4\n"
+            "3. Кидай .jar файлы в <code>.minecraft/mods</code>\n"
+            "4. Запусти игру\n\n"
+            "💬 <b>Проблемы?</b>\n"
+            "Напиши в поддержку — кнопка в главном меню."
+        )
+    else:
+        text = (
+            "❓ <b>Help</b>\n\n"
+            "📥 <b>How to download:</b>\n"
+            "1. Press «📥 Download NightWare»\n"
+            "2. Subscribe to the channel (if required)\n"
+            "3. Get the file\n\n"
+            "🎮 <b>How to install:</b>\n"
+            "1. Install <b>Fabric Loader</b> 1.21.4\n"
+            "2. Download <b>Fabric API</b> 1.21.4\n"
+            "3. Put .jar files into <code>.minecraft/mods</code>\n"
+            "4. Launch the game\n\n"
+            "💬 <b>Issues?</b>\n"
+            "Contact support — button in main menu."
+        )
+    await message.answer(text, parse_mode="HTML", reply_markup=back_kb(lang))
+
+
+@dp.message(Command("lang"))
+async def cmd_lang(message: Message):
+    lang = await db.get_lang(message.from_user.id)
+    await message.answer(
+        t(lang, "lang_choose"),
+        reply_markup=lang_kb(),
+        parse_mode="HTML"
+    )
+
+
+# ===== CALLBACK-КНОПКИ =====
+
 @dp.callback_query(F.data == "download")
 async def cb_download(callback: CallbackQuery):
     lang = await db.get_lang(callback.from_user.id)
 
-    # Проверка подписки
     if not await is_subscribed(callback.from_user.id):
         await callback.message.edit_text(
             t(lang, "sub_required"),
@@ -144,7 +200,6 @@ async def cb_check_sub(callback: CallbackQuery):
             t(lang, "sub_success"),
             parse_mode="HTML"
         )
-        # Сразу отправляем файл
         if os.path.exists(JAR_FILE):
             file = FSInputFile(JAR_FILE, filename=JAR_FILE)
             await callback.message.answer_document(
@@ -225,16 +280,6 @@ async def cb_set_lang(callback: CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer()
-
-
-@dp.message(Command("menu"))
-async def cmd_menu(message: Message):
-    lang = await db.get_lang(message.from_user.id)
-    await message.answer(
-        t(lang, "menu_title"),
-        reply_markup=main_menu(lang),
-        parse_mode="HTML"
-    )
 
 
 # ===== АДМИН-КОМАНДЫ =====
