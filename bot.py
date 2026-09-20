@@ -8,14 +8,18 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramForbiddenError, TelegramRetryAfter, TelegramBadRequest
+)
 
 from config import (
     BOT_TOKEN as CONFIG_TOKEN,
-    CLIENT_NAME, CLIENT_VERSION,
-    CLIENT_SIZE, ADMIN_ID, SUPPORT_URL, JAR_FILE
+    CLIENT_NAME, CLIENT_VERSION, CLIENT_SIZE,
+    ADMIN_ID, SUPPORT_URL, JAR_FILE,
+    CHANNEL_ID, CHANNEL_URL, DEFAULT_LANG
 )
 import database as db
+from texts import t
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", CONFIG_TOKEN)
 
@@ -24,165 +28,263 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-stats = {"downloads": 0}
+
+# ===== ПРОВЕРКА ПОДПИСКИ =====
+
+async def is_subscribed(user_id: int) -> bool:
+    """Проверяет подписан ли юзер на канал"""
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in ("member", "administrator", "creator")
+    except TelegramBadRequest:
+        # Если канал неверно указан или бот не админ — не блокируем юзера
+        logging.warning("Не удалось проверить подписку. Проверь CHANNEL_ID!")
+        return True
+    except Exception as e:
+        logging.error(f"Ошибка проверки подписки: {e}")
+        return True
 
 
-def main_menu():
+# ===== КЛАВИАТУРЫ =====
+
+def main_menu(lang: str):
     kb = InlineKeyboardBuilder()
-    kb.button(text="📥 Скачать NightWare", callback_data="download")
-    kb.button(text="ℹ️ Информация", callback_data="info")
-    kb.button(text="💬 Поддержка", url=SUPPORT_URL)
+    kb.button(text=t(lang, "btn_download"), callback_data="download")
+    kb.button(text=t(lang, "btn_info"), callback_data="info")
+    kb.button(text=t(lang, "btn_lang"), callback_data="lang")
+    kb.button(text=t(lang, "btn_support"), url=SUPPORT_URL)
     kb.adjust(1)
     return kb.as_markup()
 
 
-def back_kb():
+def back_kb(lang: str):
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🏠 В главное меню", callback_data="back")
+        InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="back")
     ]])
 
 
+def sub_kb(lang: str):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(lang, "btn_subscribe"), url=CHANNEL_URL)],
+        [InlineKeyboardButton(text=t(lang, "btn_check_sub"), callback_data="check_sub")],
+        [InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="back")],
+    ])
+
+
+def lang_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="set_lang_ru")],
+        [InlineKeyboardButton(text="🇬🇧 English", callback_data="set_lang_en")],
+        [InlineKeyboardButton(text="🏠 Назад / Back", callback_data="back")],
+    ])
+
+
+# ===== ХЕНДЛЕРЫ =====
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    # Сохраняем юзера в БД
     await db.add_user(
         user_id=message.from_user.id,
         username=message.from_user.username or "",
-        first_name=message.from_user.first_name or ""
+        first_name=message.from_user.first_name or "",
+        lang=DEFAULT_LANG
     )
-
-    text = (
-        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
-        f"🌙 Это бот для скачивания мода <b>{CLIENT_NAME}</b>\n"
-        f"📌 Версия: <b>{CLIENT_VERSION}</b>\n"
-        f"💾 Размер: <b>{CLIENT_SIZE}</b>\n\n"
-        f"Жми кнопку ниже 👇"
-    )
-    await message.answer(text, reply_markup=main_menu(), parse_mode="HTML")
+    lang = await db.get_lang(message.from_user.id)
+    text = t(lang, "start",
+             name=message.from_user.first_name,
+             client=CLIENT_NAME,
+             version=CLIENT_VERSION,
+             size=CLIENT_SIZE)
+    await message.answer(text, reply_markup=main_menu(lang), parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "download")
 async def cb_download(callback: CallbackQuery):
+    lang = await db.get_lang(callback.from_user.id)
+
+    # Проверка подписки
+    if not await is_subscribed(callback.from_user.id):
+        await callback.message.edit_text(
+            t(lang, "sub_required"),
+            reply_markup=sub_kb(lang),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
     if not os.path.exists(JAR_FILE):
         await callback.answer("❌ Файл мода не найден", show_alert=True)
         return
 
-    await callback.answer("⏳ Отправляю файл...")
-    await callback.message.answer("📦 Подготавливаю файл, секунду...")
+    await callback.answer("⏳")
+    await callback.message.answer(t(lang, "preparing"))
 
     try:
         file = FSInputFile(JAR_FILE, filename=JAR_FILE)
         await callback.message.answer_document(
             file,
-            caption=(
-                f"✅ <b>{CLIENT_NAME} готов!</b>\n\n"
-                f"📌 Версия: <b>{CLIENT_VERSION}</b>\n"
-                f"💾 Размер: <b>{CLIENT_SIZE}</b>\n\n"
-                f"📂 <b>Как установить:</b>\n"
-                f"1️⃣ Установи <b>Fabric Loader</b> для 1.21.4\n"
-                f"   (fabricmc.net)\n"
-                f"2️⃣ Скачай <b>Fabric API</b> для 1.21.4\n"
-                f"   (modrinth.com/mod/fabric-api)\n"
-                f"3️⃣ Кидай этот .jar и Fabric API в папку\n"
-                f"   <code>.minecraft/mods</code>\n"
-                f"4️⃣ Запусти игру через профиль <b>Fabric 1.21.4</b> 🎮\n\n"
-                f"❓ Проблемы? → Поддержка"
-            ),
+            caption=t(lang, "file_caption",
+                      client=CLIENT_NAME,
+                      version=CLIENT_VERSION,
+                      size=CLIENT_SIZE),
             parse_mode="HTML",
-            reply_markup=back_kb()
+            reply_markup=back_kb(lang)
         )
-        stats["downloads"] += 1
+        await db.increment_downloads(callback.from_user.id)
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
 
 
+@dp.callback_query(F.data == "check_sub")
+async def cb_check_sub(callback: CallbackQuery):
+    lang = await db.get_lang(callback.from_user.id)
+
+    if await is_subscribed(callback.from_user.id):
+        await callback.message.edit_text(
+            t(lang, "sub_success"),
+            parse_mode="HTML"
+        )
+        # Сразу отправляем файл
+        if os.path.exists(JAR_FILE):
+            file = FSInputFile(JAR_FILE, filename=JAR_FILE)
+            await callback.message.answer_document(
+                file,
+                caption=t(lang, "file_caption",
+                          client=CLIENT_NAME,
+                          version=CLIENT_VERSION,
+                          size=CLIENT_SIZE),
+                parse_mode="HTML",
+                reply_markup=back_kb(lang)
+            )
+            await db.increment_downloads(callback.from_user.id)
+    else:
+        await callback.answer(t(lang, "sub_failed"), show_alert=True)
+
+
 @dp.callback_query(F.data == "info")
 async def cb_info(callback: CallbackQuery):
-    text = (
-        f"📖 <b>О моде {CLIENT_NAME}</b>\n\n"
-        f"🔹 Версия: <b>{CLIENT_VERSION}</b>\n"
-        f"🔹 Загрузчик: <b>Fabric</b>\n"
-        f"🔹 Размер: <b>{CLIENT_SIZE}</b>\n\n"
-        f"📌 <b>Что нужно:</b>\n"
-        f"1️⃣ Minecraft <b>1.21.4</b>\n"
-        f"2️⃣ <b>Fabric Loader</b> 1.21.4\n"
-        f"3️⃣ <b>Fabric API</b> в папке mods\n\n"
-        f"📂 <b>Куда кидать моды:</b>\n"
-        f"Win+R → <code>%appdata%\\.minecraft</code> → папка <b>mods</b>\n\n"
-        f"❓ Проблемы? → Поддержка"
-    )
+    lang = await db.get_lang(callback.from_user.id)
+    text = t(lang, "info",
+             client=CLIENT_NAME,
+             version=CLIENT_VERSION,
+             size=CLIENT_SIZE)
     try:
         await callback.message.edit_text(
-            text,
-            reply_markup=back_kb(),
-            parse_mode="HTML"
+            text, reply_markup=back_kb(lang), parse_mode="HTML"
         )
     except Exception:
         await callback.message.answer(
-            text,
-            reply_markup=back_kb(),
-            parse_mode="HTML"
+            text, reply_markup=back_kb(lang), parse_mode="HTML"
         )
     await callback.answer()
 
 
 @dp.callback_query(F.data == "back")
 async def cb_back(callback: CallbackQuery):
-    text = "🏠 <b>Главное меню</b>\n\nВыбери действие:"
+    lang = await db.get_lang(callback.from_user.id)
     try:
         await callback.message.edit_text(
-            text,
-            reply_markup=main_menu(),
+            t(lang, "menu_title"),
+            reply_markup=main_menu(lang),
             parse_mode="HTML"
         )
     except Exception:
         await callback.message.answer(
-            text,
-            reply_markup=main_menu(),
+            t(lang, "menu_title"),
+            reply_markup=main_menu(lang),
             parse_mode="HTML"
         )
     await callback.answer()
 
 
-@dp.message(Command("stats"))
-async def cmd_stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    count = await db.get_users_count()
-    await message.answer(
-        f"📊 <b>Статистика</b>\n\n"
-        f"👥 Юзеров в БД: <b>{count}</b>\n"
-        f"📥 Скачиваний за сессию: <b>{stats['downloads']}</b>",
+@dp.callback_query(F.data == "lang")
+async def cb_lang(callback: CallbackQuery):
+    lang = await db.get_lang(callback.from_user.id)
+    try:
+        await callback.message.edit_text(
+            t(lang, "lang_choose"),
+            reply_markup=lang_kb(),
+            parse_mode="HTML"
+        )
+    except Exception:
+        await callback.message.answer(
+            t(lang, "lang_choose"),
+            reply_markup=lang_kb(),
+            parse_mode="HTML"
+        )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("set_lang_"))
+async def cb_set_lang(callback: CallbackQuery):
+    new_lang = callback.data.replace("set_lang_", "")
+    await db.set_lang(callback.from_user.id, new_lang)
+    await callback.message.edit_text(
+        t(new_lang, "lang_set"),
+        reply_markup=main_menu(new_lang),
         parse_mode="HTML"
     )
+    await callback.answer()
 
 
 @dp.message(Command("menu"))
 async def cmd_menu(message: Message):
+    lang = await db.get_lang(message.from_user.id)
     await message.answer(
-        "🏠 <b>Главное меню</b>\n\nВыбери действие:",
-        reply_markup=main_menu(),
+        t(lang, "menu_title"),
+        reply_markup=main_menu(lang),
         parse_mode="HTML"
     )
 
 
-# ===== РАССЫЛКА =====
+# ===== АДМИН-КОМАНДЫ =====
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        lang = await db.get_lang(message.from_user.id)
+        await message.answer(t(lang, "no_access"))
+        return
+
+    s = await db.get_detailed_stats()
+
+    text = (
+        "📊 <b>РАСШИРЕННАЯ СТАТИСТИКА</b>\n\n"
+        f"👥 Всего юзеров: <b>{s['total']}</b>\n"
+        f"🔥 Активных за 24ч: <b>{s['active']}</b>\n\n"
+        f"📈 <b>Новые юзеры:</b>\n"
+        f"  • За 24 часа: <b>{s['day']}</b>\n"
+        f"  • За 7 дней: <b>{s['week']}</b>\n"
+        f"  • За 30 дней: <b>{s['month']}</b>\n\n"
+        f"📥 Всего скачиваний: <b>{s['downloads']}</b>\n\n"
+    )
+
+    if s["top"]:
+        text += "🏆 <b>Топ-5 по скачиваниям:</b>\n"
+        for i, (first_name, username, downloads) in enumerate(s["top"], 1):
+            name = first_name or "Без имени"
+            uname = f" (@{username})" if username else ""
+            text += f"  {i}. {name}{uname} — <b>{downloads}</b>\n"
+
+    await message.answer(text, parse_mode="HTML")
+
 
 @dp.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
     if message.from_user.id != ADMIN_ID:
+        lang = await db.get_lang(message.from_user.id)
+        await message.answer(t(lang, "no_access"))
         return
 
-    # Получаем текст после /broadcast
     text = message.text.replace("/broadcast", "", 1).strip()
 
     if not text:
         await message.answer(
             "📢 <b>Как делать рассылку:</b>\n\n"
-            "Напиши команду так:\n"
+            "Напиши:\n"
             "<code>/broadcast Привет, вышел новый мод!</code>\n\n"
-            "Или отправь <b>в ответ</b> на любое сообщение (с картинкой/файлом) "
-            "команду <code>/broadcast</code> — оно разошлётся всем.",
+            "Или отправь <b>в ответ</b> на любое сообщение команду "
+            "<code>/broadcast</code> — оно разошлётся всем.",
             parse_mode="HTML"
         )
         return
@@ -202,25 +304,20 @@ async def cmd_broadcast(message: Message):
 
     for user_id in users:
         try:
+            lang = await db.get_lang(user_id)
             await bot.send_message(
                 user_id,
-                f"📢 <b>Сообщение от админа:</b>\n\n{text}",
+                f"📢 <b>{'Сообщение от админа' if lang == 'ru' else 'Message from admin'}:</b>\n\n{text}",
                 parse_mode="HTML"
             )
             success += 1
-            await asyncio.sleep(0.05)  # защита от лимитов Telegram
+            await asyncio.sleep(0.05)
         except TelegramForbiddenError:
-            # Юзер заблокировал бота
             failed += 1
         except TelegramRetryAfter as e:
-            # Превышен лимит — ждём сколько сказал Telegram
             await asyncio.sleep(e.retry_after)
             try:
-                await bot.send_message(
-                    user_id,
-                    f"📢 <b>Сообщение от админа:</b>\n\n{text}",
-                    parse_mode="HTML"
-                )
+                await bot.send_message(user_id, text, parse_mode="HTML")
                 success += 1
             except Exception:
                 failed += 1
@@ -234,6 +331,8 @@ async def cmd_broadcast(message: Message):
         parse_mode="HTML"
     )
 
+
+# ===== ЗАПУСК =====
 
 async def main():
     await db.init_db()
