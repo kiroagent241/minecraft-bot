@@ -9,10 +9,10 @@ SUPPORT_URL = "https://t.me/@mallonyy"
 # ===== НОВОЕ =====
 
 # ID канала для обязательной подписки (например @nightware_news)
-CHANNEL_ID = "@твой_канал"
+CHANNEL_ID = "@nightware_mc"
 
 # Ссылка на канал (для кнопки "Подписаться")
-CHANNEL_URL = "https://t.me/твой_канал"
+CHANNEL_URL = "https://t.me/nightware_mc"
 
 # Язык по умолчанию: "ru" или "en"
-DEFAULT_LANG = "ru"
+DEFAULT_LANG = "en"
