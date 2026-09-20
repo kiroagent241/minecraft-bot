@@ -10,9 +10,14 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import (
-    BOT_TOKEN, CLIENT_NAME, CLIENT_VERSION,
+    BOT_TOKEN as CONFIG_TOKEN,
+    CLIENT_NAME, CLIENT_VERSION,
     CLIENT_SIZE, ADMIN_ID, SUPPORT_URL, JAR_FILE
 )
+
+# Токен берётся из Railway Variables (BOT_TOKEN),
+# если там пусто — из config.py
+BOT_TOKEN = os.getenv("BOT_TOKEN", CONFIG_TOKEN)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -127,7 +132,6 @@ async def cb_back(callback: CallbackQuery):
             parse_mode="HTML"
         )
     except Exception:
-        # Если это документ (файл) — edit_text не сработает, отправляем новое
         await callback.message.answer(
             text,
             reply_markup=main_menu(),
