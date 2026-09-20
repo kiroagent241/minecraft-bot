@@ -213,7 +213,12 @@ async def cb_check_sub(callback: CallbackQuery):
             )
             await db.increment_downloads(callback.from_user.id)
     else:
-        await callback.answer(t(lang, "sub_failed"), show_alert=True)
+        # Алерт без HTML — чистый текст
+        if lang == "ru":
+            alert_text = "❌ Ты ещё не подписан. Подпишись и попробуй снова."
+        else:
+            alert_text = "❌ You're not subscribed yet. Subscribe and try again."
+        await callback.answer(alert_text, show_alert=True)
 
 
 @dp.callback_query(F.data == "info")
